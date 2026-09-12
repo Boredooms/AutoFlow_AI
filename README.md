@@ -14,7 +14,7 @@ machine, streams every step live to a browser UI, and never fakes progress.
 
 ---
 
-## Table of contents
+### Table of contents
 
 1. [What it does](#what-it-does)
 2. [The AI/ML models — every model, how it works end to end](#the-aiml-models)
