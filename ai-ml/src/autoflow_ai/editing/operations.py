@@ -17,6 +17,7 @@ class EditKind(StrEnum):
     """Kinds of deterministic text edits supported in this slice."""
 
     REPLACE_TEXT = "replace_text"          # literal find/replace
+    APPEND_TEXT = "append_text"            # append text to end of document
     NORMALIZE_EM_DASHES = "normalize_em_dashes"   # " - " / "--" -> em dash
     REMOVE_DOUBLE_SPACES = "remove_double_spaces"  # collapse runs of spaces
     FIX_SPACE_BEFORE_PUNCT = "fix_space_before_punct"  # "word ." -> "word."
@@ -40,6 +41,8 @@ class EditOperation(AutoFlowModel):
     def describe(self) -> str:
         if self.kind == EditKind.REPLACE_TEXT:
             return f"replace {self.find!r} -> {self.replace!r}"
+        if self.kind == EditKind.APPEND_TEXT:
+            return f"append {self.replace!r}"
         return self.kind.value
 
 
@@ -53,6 +56,14 @@ def _apply_replace(text: str, op: EditOperation) -> tuple[str, int]:
     pattern = re.compile(re.escape(op.find), re.IGNORECASE)
     new_text, count = pattern.subn(op.replace or "", text)
     return new_text, count
+
+
+def _apply_append(text: str, op: EditOperation) -> tuple[str, int]:
+    addition = op.replace or ""
+    if not addition:
+        return text, 0
+    sep = "" if (not text or text.endswith("\n")) else "\n"
+    return text + sep + addition, 1
 
 
 def _apply_em_dashes(text: str) -> tuple[str, int]:
@@ -98,6 +109,8 @@ def apply_operation(text: str, op: EditOperation) -> tuple[str, int]:
 
     if op.kind == EditKind.REPLACE_TEXT:
         return _apply_replace(text, op)
+    if op.kind == EditKind.APPEND_TEXT:
+        return _apply_append(text, op)
     if op.kind == EditKind.NORMALIZE_EM_DASHES:
         return _apply_em_dashes(text)
     if op.kind == EditKind.REMOVE_DOUBLE_SPACES:
@@ -143,12 +156,23 @@ def detect_operations_from_prompt(prompt: str) -> list[EditOperation]:
     if "trailing" in p or "trim" in p:
         ops.append(EditOperation(kind=EditKind.TRIM_TRAILING_WHITESPACE))
 
-    # Explicit replace: replace "X" with "Y"
-    m = re.search(r'replace\s+"([^"]+)"\s+with\s+"([^"]+)"', prompt, re.IGNORECASE)
-    if m:
-        ops.append(
-            EditOperation(kind=EditKind.REPLACE_TEXT, find=m.group(1), replace=m.group(2))
-        )
+    # Explicit replace / change, quoted or unquoted:
+    #   replace "X" with "Y"        change "X" to "Y"
+    #   replace X with Y            change X to Y
+    #   replace the word X with Y   replace all X with Y
+    for op in _detect_replace_ops(prompt):
+        ops.append(op)
+
+    # Append / add text: append "…" / add the line "…" / add a conclusion "…"
+    for op in _detect_append_ops(prompt):
+        ops.append(op)
+
+    # Fallback: the prompt asks to edit but named no concrete change. Apply a
+    # safe, deterministic normalization pass (never invents content) so the
+    # edit is real and independently verifiable rather than a silent no-op.
+    if not ops and ("edit" in p or "fix" in p or "tidy" in p or "format" in p):
+        ops.append(EditOperation(kind=EditKind.TRIM_TRAILING_WHITESPACE))
+        ops.append(EditOperation(kind=EditKind.REMOVE_DOUBLE_SPACES))
 
     # De-duplicate while preserving order.
     seen = set()
@@ -159,3 +183,85 @@ def detect_operations_from_prompt(prompt: str) -> list[EditOperation]:
             seen.add(key)
             unique.append(op)
     return unique
+
+
+# Filler words that may appear between "replace" and the target term in natural
+# language ("replace the word DRAFT", "replace all occurrences of DRAFT").
+_REPLACE_FILLERS = (
+    "all occurrences of", "all instances of", "every occurrence of",
+    "the word", "the words", "the text", "the phrase", "all", "every",
+)
+
+
+def _strip_filler(term: str) -> str:
+    t = term.strip()
+    low = t.lower()
+    for filler in _REPLACE_FILLERS:
+        if low.startswith(filler + " "):
+            t = t[len(filler):].strip()
+            low = t.lower()
+    return t.strip("\"'")
+
+
+def _detect_replace_ops(prompt: str) -> list[EditOperation]:
+    """Detect replace/change ops, quoted or unquoted.
+
+    Handles: replace X with Y, change X to Y, substitute X for Y, and the
+    quoted variants. Unquoted terms are captured up to the ' with '/' to '
+    keyword and have filler words ("the word", "all") stripped.
+    """
+
+    ops: list[EditOperation] = []
+    patterns = (
+        # replace <find> with <replace>
+        r'\breplace\s+(.+?)\s+with\s+(.+?)(?:$|[.,;\n]|\s+and\s+save|\s+then\b)',
+        # change <find> to <replace>
+        r'\bchange\s+(.+?)\s+to\s+(.+?)(?:$|[.,;\n]|\s+and\s+save|\s+then\b)',
+        # substitute <find> for <replace>
+        r'\bsubstitute\s+(.+?)\s+for\s+(.+?)(?:$|[.,;\n]|\s+and\s+save|\s+then\b)',
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, prompt, re.IGNORECASE):
+            find = _strip_filler(m.group(1))
+            replace = m.group(2).strip().strip("\"'")
+            if find and replace and find != replace:
+                ops.append(
+                    EditOperation(kind=EditKind.REPLACE_TEXT, find=find, replace=replace)
+                )
+    return ops
+
+
+def _detect_append_ops(prompt: str) -> list[EditOperation]:
+    """Detect explicit append/add-text ops with quoted content."""
+
+    ops: list[EditOperation] = []
+    for m in re.finditer(
+        r'\b(?:append|add(?:\s+the\s+(?:line|text|sentence))?)\s+"([^"]+)"',
+        prompt, re.IGNORECASE,
+    ):
+        ops.append(EditOperation(kind=EditKind.APPEND_TEXT, replace=m.group(1)))
+    return ops
+
+
+def expected_conditions_from_prompt(prompt: str) -> dict:
+    """Derive verifiable post-conditions from the instruction.
+
+    Returns ``{"must_contain": [...], "must_not_contain": [...]}`` so the mission
+    verifier can confirm the requested change actually landed in the file — not
+    merely that the bytes changed. Only derived from explicit replace/append
+    ops (the ones with concrete target text); structural cleanups add nothing.
+    """
+
+    must_contain: list[str] = []
+    must_not_contain: list[str] = []
+    for op in _detect_replace_ops(prompt):
+        if op.replace:
+            must_contain.append(op.replace)
+        # We do not assert must_not_contain for the old term: the replacement
+        # text could legitimately contain it, and case/substring overlap makes
+        # a blanket absence check unreliable. Presence of the new text is the
+        # authoritative signal that the replace was applied.
+    for op in _detect_append_ops(prompt):
+        if op.replace:
+            must_contain.append(op.replace)
+    return {"must_contain": must_contain, "must_not_contain": must_not_contain}

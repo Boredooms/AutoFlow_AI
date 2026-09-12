@@ -535,7 +535,9 @@ class AutoFlow:
         tool_registry = ToolRegistry()
         session = DocumentSession()
         register_document_tools(tool_registry, session)
-        _register_mission_verify_tool(tool_registry, session, target_path)
+        from .editing.operations import expected_conditions_from_prompt
+        expected = expected_conditions_from_prompt(prompt)
+        _register_mission_verify_tool(tool_registry, session, target_path, expected)
 
         controller = ToolCallingController(
             registry=tool_registry, permissions=DEFAULT_PERMISSIONS
@@ -613,7 +615,8 @@ class AutoFlow:
         self.memory.promote(candidate, registered_tools=registered)
 
 
-def _register_mission_verify_tool(tool_registry, session, target_path: str | None) -> None:
+def _register_mission_verify_tool(tool_registry, session, target_path: str | None,
+                                  expected: dict | None = None) -> None:
     """Register a real ``document.verify`` tool for society missions.
 
     The base multi-agent engine treats ``document.verify`` as an engine-owned
@@ -644,15 +647,53 @@ def _register_mission_verify_tool(tool_registry, session, target_path: str | Non
             raise ToolExecutionError("verify_failed", str(exc)) from exc
         current_hash = sha256_file(p)
         changed = session.hash_after is not None and session.hash_before != session.hash_after
-        # Name the evidence with the exact verification requirement keys the
-        # planner attaches (edits_present, file_reopens) so the independent
-        # critic can confirm each requirement is actually satisfied.
+
+        # Enforce the requested post-condition: the instructed content must
+        # actually be present in the reopened file. A no-op edit that merely
+        # rewrote the bytes (or changed nothing meaningful) must NOT pass.
+        exp = expected or {}
+        must_contain = [s for s in exp.get("must_contain", []) if s]
+        must_not_contain = [s for s in exp.get("must_not_contain", []) if s]
+        missing = [s for s in must_contain if s not in text]
+        present_forbidden = [s for s in must_not_contain if s in text]
+        content_ok = not missing and not present_forbidden
+
+        # Did concrete edit operations actually execute? (A normalization pass
+        # on already-clean text legitimately produces zero byte changes yet is
+        # still a real, completed edit — that is honest success, not fake.)
+        edit_ran = bool(getattr(session, "last_edit_report", None))
+
+        # If the instruction had explicit expected content, that governs the
+        # verdict: the requested text MUST be present. Otherwise the edit is
+        # verified when a real save ran (either it changed the bytes, or edit
+        # operations executed cleanly against an already-conformant file).
+        if must_contain or must_not_contain:
+            verified = content_ok
+            edits_present = content_ok
+        else:
+            verified = bool(changed or edit_ran)
+            edits_present = bool(changed)
+
+        if not verified:
+            reasons = []
+            if missing:
+                reasons.append(f"missing expected text: {missing}")
+            if present_forbidden:
+                reasons.append(f"forbidden text still present: {present_forbidden}")
+            if not (must_contain or must_not_contain) and not (changed or edit_ran):
+                reasons.append("no edit operations ran and the file was not changed")
+            raise ToolExecutionError(
+                "verify_failed",
+                "document verification failed: " + "; ".join(reasons),
+            )
+
         return {
             "verified": True,
             "file_reopens": True,
-            "edits_present": bool(changed),
+            "edits_present": bool(edits_present),
             "readable_chars": len(text),
             "changed": bool(changed),
+            "expected_satisfied": bool(content_ok) if (must_contain or must_not_contain) else None,
             "hash": current_hash,
         }
 

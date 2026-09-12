@@ -66,9 +66,14 @@ INDEX_HTML = r"""<!doctype html>
     <h2>Mission</h2>
     <textarea id="prompt" placeholder="Tell AutoFlow what you want done...">Research a topic, use my references, create a professional Word report, then prepare an email with the report attached.</textarea>
     <div class="row">
-      <select id="mode"><option value="simulation">Simulation</option></select>
+      <select id="mode">
+        <option value="simulation">Simulation</option>
+        <option value="real">Real (edit a file on disk)</option>
+      </select>
       <select id="model"><option value="auto">auto</option></select>
     </div>
+    <input id="target" type="text" placeholder="Real mode: absolute path to a .txt/.md/.docx file to edit"
+           style="width:100%;margin-top:8px;padding:8px;box-sizing:border-box;display:none" />
     <button id="run" class="run">Run Mission</button>
     <div class="kv" id="mission-meta"></div>
     <h2 style="margin-top:16px">Agenticity</h2>
@@ -126,11 +131,21 @@ async function run(){
   $('#verify').textContent='running…'; $('#agenticity').textContent='—';
   setStatus('running');
   const prompt = $('#prompt').value, mode=$('#mode').value, model=$('#model').value;
+  const target = $('#target').value.trim();
+  if(mode==='real' && !target){
+    $('#verify').textContent='Real mode needs a file path.'; setStatus('failed'); $('#run').disabled=false; return;
+  }
   const rec = await j('/missions', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({prompt, mode, model})});
-  $('#mission-meta').innerHTML = `id <code>${rec.mission_id}</code> · mode ${rec.mode} · model ${rec.model}`;
-  await j('/missions/'+rec.mission_id+'/simulate', {method:'POST',
-    headers:{'Content-Type':'application/json'}, body:'{}'});
+    body: JSON.stringify({prompt, mode, model, target_path: target})});
+  $('#mission-meta').innerHTML = `id <code>${rec.mission_id}</code> · mode ${mode} · model ${rec.model}`;
+  if(mode==='real'){
+    await j('/missions/'+rec.mission_id+'/run', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({target_path: target, use_model: model!=='auto' && model.indexOf('local')<0})});
+  } else {
+    await j('/missions/'+rec.mission_id+'/simulate', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:'{}'});
+  }
 
   const es = new EventSource('/missions/'+rec.mission_id+'/events');
   es.onmessage = e => { try{ addEv(JSON.parse(e.data)); }catch(_){} };
@@ -145,11 +160,12 @@ async function run(){
     const m = await j('/missions/'+rec.mission_id);
     setStatus(m.status);
     const res = m.result||{};
-    $('#verify').innerHTML =
-      `document_verified: <b>${res.document_verified}</b><br>`+
-      `draft_verified: <b>${res.draft_verified}</b><br>`+
-      `sent_verified: <b>${res.sent_verified}</b><br>`+
-      `outcome: <b>${res.outcome}</b>`;
+    let vh = `document_verified: <b>${res.document_verified}</b><br>outcome: <b>${res.outcome}</b>`;
+    if(res.target){ vh += `<br>file: <code>${res.target}</code>`; }
+    if(res.reason){ vh += `<br>reason: ${res.reason}`; }
+    if(res.draft_verified!==undefined){ vh += `<br>draft_verified: <b>${res.draft_verified}</b>`; }
+    if(res.sent_verified!==undefined){ vh += `<br>sent_verified: <b>${res.sent_verified}</b>`; }
+    $('#verify').innerHTML = vh;
     if(res.agenticity){ $('#agenticity').innerHTML = Object.entries(res.agenticity)
       .map(([k,v])=>`${k}: <b>${v}</b>`).join('<br>'); }
     const arts = await j('/missions/'+rec.mission_id+'/artifacts');
@@ -160,6 +176,9 @@ async function run(){
 }
 
 $('#run').addEventListener('click', run);
+$('#mode').addEventListener('change', () => {
+  $('#target').style.display = ($('#mode').value==='real') ? 'block' : 'none';
+});
 loadHealth(); loadModels();
 </script>
 </body>

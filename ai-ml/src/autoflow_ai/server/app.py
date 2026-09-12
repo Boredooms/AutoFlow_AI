@@ -132,7 +132,23 @@ def _make_handler(server_state: AutoFlowServer):
                 rec = server_state.registry.create(
                     prompt[:2000], mode=body.get("mode", "simulation"),
                     model=body.get("model", "auto"))
+                target = (body.get("target_path") or "").strip()
+                if target:
+                    rec.target_path = target
                 return self._json(rec.as_dict(), 201)
+
+            m = re.match(r"^/missions/([\w\-]+)/run$", path)
+            if m:
+                rec = server_state.registry.get(m.group(1))
+                if rec is None:
+                    return self._json({"error": "not found"}, 404)
+                target = (body.get("target_path") or getattr(rec, "target_path", "") or "").strip()
+                if not target:
+                    return self._json({"error": "target_path required for a real run"}, 400)
+                server_state.registry.run_real_async(
+                    rec, target_path=target, use_model=bool(body.get("use_model", False)))
+                return self._json({"ok": True, "mission_id": rec.mission_id,
+                                   "status": "running", "mode": "real"})
 
             m = re.match(r"^/missions/([\w\-]+)/simulate$", path)
             if m:
