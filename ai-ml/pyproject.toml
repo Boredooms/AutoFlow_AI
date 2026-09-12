@@ -35,6 +35,13 @@ vision = [
 browser = [
     "playwright>=1.40,<2.0",
 ]
+# On-device tool-calling agent (Cactus Needle 2). Optional; imported lazily on
+# first use so the base package + test suite are unaffected when unused. The
+# fine-tuned weights (~14MB my_agent.cact) ship inside the package.
+needle = [
+    "cactus-needle>=2.0,<3.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
 
 [project.scripts]
 autoflow = "autoflow_ai.cli:main"
@@ -45,6 +52,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autoflow_ai"]
+# Ship the bundled fine-tuned Needle weights inside the wheel/package.
+artifacts = ["src/autoflow_ai/needle_agent/weights/*.cact"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

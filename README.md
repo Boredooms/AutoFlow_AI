@@ -129,6 +129,24 @@ uv run python -m autoflow_ai.cli model lab compare --models nvidia,qwen,determin
 uv run python -m autoflow_ai.cli model console
 ```
 
+## On-device tool-calling agent (Cactus Needle 2)
+
+A 45M-parameter on-device model that turns a natural-language instruction into
+real tool calls (Word, notes, browser, YouTube, Gmail draft, file ops, and 20+
+more). The fine-tuned weights (`my_agent.cact`, ~14MB) ship inside the package,
+so nothing to download; it runs on the CPU with no API key and no cloud.
+
+```powershell
+uv pip install cactus-needle                       # one-time (optional extra)
+# plan only (safe, no side effects):
+uv run python -m autoflow_ai.cli needle run "write hi my name is archishman into notes.docx"
+# actually perform the action on your machine:
+uv run python -m autoflow_ai.cli needle run "make a note that says buy milk" --execute
+```
+
+Safe by default: without `--execute` the model selects the tool and returns the
+structured action without touching the machine.
+
 ## Running simulation & the flagship
 
 ```powershell

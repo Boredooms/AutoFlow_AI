@@ -34,6 +34,7 @@ machine (Python 3.14, Windows). The one SKIPPED is web access (opt-in).
 | Real Gmail send | SKIPPED | Yes | `AUTOFLOW_REAL_GMAIL=1` + controlled account | approval-bound side effect |
 | Live NVIDIA benchmark runs | SKIPPED | Yes | `AUTOFLOW_LIVE_NVIDIA=1` | otherwise structural/simulated |
 | Mission checkpoint / resume | LIVE | Yes | `--persist` / `--resume` | store at `AUTOFLOW_MISSION_DIR` |
+| On-device tool-calling agent (Needle 2) | LIVE | Yes (plan-only) | `uv pip install cactus-needle` | 45M-param model, ~14MB fine-tuned weights bundled; runs on CPU, no cloud/key; `--execute` for real actions |
 
 ## Modes in practice
 

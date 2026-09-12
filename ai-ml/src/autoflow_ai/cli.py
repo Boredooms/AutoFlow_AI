@@ -796,6 +796,20 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     add("api server", "PASS", "stdlib http.server (no extra deps)")
     add("frontend", "PASS", "served by api at /")
 
+    # on-device tool-calling agent (Cactus Needle 2)
+    try:
+        from .needle_agent import available as _needle_available
+
+        na = _needle_available()
+        if na.get("available"):
+            add("needle agent (on-device)", "PASS",
+                "bundled fine-tuned weights" if na.get("bundled_weights_present")
+                else "base model (HF)")
+        else:
+            add("needle agent (on-device)", "SKIPPED", na.get("reason", "unavailable"))
+    except Exception as exc:  # noqa: BLE001
+        add("needle agent (on-device)", "SKIPPED", type(exc).__name__)
+
     node = __import__("shutil").which("node")
     add("node (optional)", "PASS" if node else "SKIPPED", node or "not required")
 
@@ -803,6 +817,34 @@ def cmd_doctor(_: argparse.Namespace) -> int:
             "summary": {s: sum(1 for c in checks if c["status"] == s)
                         for s in ("PASS", "WARN", "FAIL", "SKIPPED")}})
     return 0 if not any(c["status"] == "FAIL" for c in checks) else 1
+
+
+def cmd_needle_run(args: argparse.Namespace) -> int:
+    """Run one instruction through the on-device Needle 2 tool-calling agent.
+
+    Safe by default (plans the tool call without side effects). Pass --execute
+    to actually perform real Windows/browser/file actions.
+    """
+
+    from .needle_agent import NeedleAgent, available
+
+    avail = available()
+    if not avail.get("available"):
+        _print({"outcome": "unavailable", "reason": avail.get("reason"),
+                "install": avail.get("install")})
+        return 1
+
+    agent = NeedleAgent(
+        execute=bool(getattr(args, "execute", False)),
+        weights=getattr(args, "weights", None),
+        output_dir=getattr(args, "output_dir", None),
+    )
+    try:
+        result = agent.run(args.instruction)
+    finally:
+        agent.close()
+    _print(result.as_dict())
+    return 0 if result.success else 1
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -1337,6 +1379,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8770)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_needle = sub.add_parser("needle", help="on-device tool-calling agent (Cactus Needle 2)")
+    nsub = p_needle.add_subparsers(dest="subcommand", required=True)
+    n_run = nsub.add_parser("run", help="turn an instruction into tool calls (on-device)")
+    n_run.add_argument("instruction")
+    n_run.add_argument("--execute", action="store_true",
+                       help="actually perform real actions (default: plan only, no side effects)")
+    n_run.add_argument("--weights", default=None, help="override the .cact weights path")
+    n_run.add_argument("--output-dir", dest="output_dir", default=None,
+                       help="directory for file-producing tools (default ~/Downloads)")
+    n_run.set_defaults(func=cmd_needle_run)
 
     p_eval = sub.add_parser("eval", help="evaluation harness")
     esub = p_eval.add_subparsers(dest="subcommand", required=True)
