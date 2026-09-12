@@ -238,3 +238,96 @@ The only path is:
 ```text
 LLM → STRUCTURED REQUEST → VALIDATION → POLICY → DETERMINISTIC RUNTIME → OBSERVATION → VERIFICATION
 ```
+
+
+---
+
+## 16. Multi-Agent Runtime (Phase 6 — implemented)
+
+Alongside the single-agent `ExecutionEngine`, a `MultiAgentRuntime` schedules a
+validated `RuntimeGraph`:
+
+```text
+LOAD GRAPH
+  ↓
+WHILE not complete:
+  handle failure -> bounded replan (else fail closed)
+  select READY nodes (deps all SUCCEEDED)
+  run independent nodes with bounded concurrency
+    for each node:
+      agent proposes structured action
+        ↓ validate tool exists (registry)
+        ↓ policy + permission check
+        ↓ approval check (high-risk -> block in headless)
+        ↓ deterministic tool execution (per-tool lock)
+        ↓ observation
+        ↓ verification
+      update node status (state machine)
+  detect deadlock (no ready nodes, not complete)
+```
+
+Invariants preserved from earlier phases: no LLM side-effect authority, only
+registered tools, deny-by-default permissions, verification for material steps,
+approval boundaries, and serializable secret-free events. Browser/computer nodes
+return UNSUPPORTED (honest stub). The original single-agent document path
+(Golden 01) is unchanged.
+
+
+---
+
+## 17. Tool-Calling Controller + Computer Use (Phase 7 — implemented)
+
+`ToolCallingController` (`runtime/tool_calling.py`) is the single authority chain
+between agents and tools:
+
+```text
+agent proposal
+  → schema validation
+  → tool registry lookup (unknown/unregistered -> fail)
+  → authorization (permission scope)
+  → policy / risk (high-risk -> approval required)
+  → approval check
+  → deterministic tool execution
+  → sanitized trace (secrets + typed text redacted)
+```
+
+Blocked tools (`computer.execute_shell`, `*.delete`, `*.shutdown`, `os.exec`, …)
+are refused even if somehow registered.
+
+**Computer use** (`computer_use/`): a backend-neutral `ComputerAdapter` with a
+real `WindowsUIAutomationAdapter` (semantic role/name/automation-id resolution,
+ambiguity detection, allowlisted app launch — never arbitrary coordinates or
+executables) and a deterministic `FakeDesktopAdapter` for tests. Actions return
+a `DesktopObservation`; a semantic `desktop_state_hash` drives change detection,
+verification and loop detection. The `ComputerAutomationAgent` proposes one
+semantic action per node and runs inside the existing `MultiAgentRuntime`.
+Live-verified with a real Notepad workflow. Browser automation is a separate
+future phase (not faked); screenshot/vision grounding has an interface but
+capture is deferred.
+
+
+---
+
+## 18. Computer-Autonomy Bundle (Phases 8–14 — implemented)
+
+The observe → act → verify loop is now real across desktop AND browser:
+
+```text
+observe (UIA + DOM + screenshot fused) → TargetResolver (never guesses)
+  → agent/step proposes semantic action
+  → ToolCallingController (schema/registry/authz/policy/approval)
+  → real adapter (WindowsUIAutomationAdapter | PlaywrightBrowserAdapter)
+  → observe again
+  → VerificationEngine (multi-signal; action != success)
+  → success | RecoveryEngine ladder + StuckDetector | fail-safe
+```
+
+Safety substrate: `RateLimits` (actions/replans/runtime), `ResourceLocks`
+(no concurrent mutation of the same app/window/file/browser context),
+`ApprovalLedger` (approval bound to exact action+args+observation hash;
+material change invalidates), secret/typed-text redaction in traces. Vision is
+provider-neutral with a per-task budget and duplicate-screenshot suppression;
+deterministic OpenCV (hash/diff/stability/template) is preferred before any
+multimodal call. Live-verified: real Notepad (UIA) and real headless Chromium
+(Playwright, local pages). Live vision-model grounding is FUTURE (interface +
+budget implemented).

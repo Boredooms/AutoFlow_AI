@@ -68,5 +68,36 @@ ai-ml/
 
 - **Phase 1 (Contract layer):** implemented — ~33 versioned contracts, DAG
   validation, approval binding, tool-argument validation, execution state
-  machine, secret-safe events. Verified by the test suite and
-  `autoflow contracts check` / `autoflow eval smoke`.
+  machine, secret-safe events.
+- **Vertical slice (Golden 01):** real headless `.docx`/`.txt`/`.md` edit + save
+  + verify via `autoflow run`.
+- **Phase 2 (Model gateway):** provider-neutral gateway with real NVIDIA +
+  ModelScope (SSE streaming) providers, retry/fallback/health, structured
+  output; deterministic local fallback. CLI `autoflow model list|test|benchmark`.
+- **Phase 3 (Context engine):** budgeted, trust-separated, ACL-filtered,
+  deterministically-hashed context. CLI `autoflow context inspect|estimate|validate`.
+- **Phase 4 (RAG):** persistent ChromaDB, docx/pdf/txt/md/json/csv ingestion,
+  authorized semantic retrieval + evidence. CLI `autoflow knowledge ...`.
+- **Phase 5 (Memory):** session + verified workflow memory (SQLite + separate
+  `autoflow_workflows` collection) + graph memory; verification-gated promotion;
+  semantic reuse with parameter binding. CLI `autoflow memory ...`.
+- **Phase 6 (Dynamic Planner + Multi-Agent Runtime):** typed planner output +
+  runtime task-graph + deterministic validator; specialist agent registry +
+  `MultiAgentRuntime` (bounded concurrency, dependency resolution, bounded
+  replanning). CLI `autoflow agents list|inspect`, `dynplan`, `run-agents`.
+- **Phase 7 (Tool-Calling Controller + Windows Computer-Use):** `ComputerAdapter`
+  + real `WindowsUIAutomationAdapter`; safe computer tools; `ToolCallingController`
+  authority chain; real `ComputerAutomationAgent`. Live-verified with Notepad.
+- **Computer-Autonomy bundle (Phases 8–14):** unified observation + fusion +
+  target resolver; **real browser automation** (Playwright headless Chromium,
+  local pages); vision interface + OpenCV deterministic CV; multi-signal
+  verification engine; recovery ladder + stuck detection; approval binding +
+  rate limits + resource locks; `AutonomyLoop`/`WorkflowExecution` observe→act→
+  verify. Live-verified with a real browser form workflow. CLI
+  `autoflow computer env|windows|inspect`.
+  (Install extras: `uv pip install -e ".[dev,windows,vision,browser]"`, then
+  `uv run playwright install chromium`.)
+
+See `../docs/IMPLEMENTATION_STATUS.md` for the authoritative ledger. All phases
+verified by the test suite (380 tests, incl. real desktop + real browser) and
+the CLI.

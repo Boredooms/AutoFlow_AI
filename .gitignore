@@ -41,6 +41,12 @@ yarn-error.log*
 # ---- Data stores / artifacts (local dev) ----
 chroma/
 .chroma/
+data/chroma/
+data/rag/
+data/index/
+data/memory.sqlite
+data/memory/
+generated/
 *.sqlite
 *.sqlite3
 artifacts/
@@ -48,6 +54,18 @@ object-store/
 tmp/
 .tmp/
 
+# ---- AutoFlow runtime / model cache (never commit weights or runtime data) ----
+.autoflow/
+**/.autoflow/
+models/*.gguf
+models/*.bin
+models/*.safetensors
+*.gguf
+*.safetensors
+model-runs/
+screenshots/
+*.png.secret
+missions/
 # ---- IDE / OS ----
 .vscode/
 .idea/

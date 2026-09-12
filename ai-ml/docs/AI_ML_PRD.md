@@ -961,6 +961,64 @@ If the send operation changes materially after approval, a new approval is requi
 
 # 13. Initial AI/ML Build Phases
 
+> **Implementation status (2026-09-12).** Contracts + vertical slice (Golden 01)
+> + Phase 2 model gateway (+SSE streaming) + Phase 3 context engine + Phase 4
+> ChromaDB RAG + Phase 5 Memory + Phase 6 Dynamic Planner + Multi-Agent Runtime
+> + **Phase 7 Tool-Calling Controller + Windows Computer-Use** are complete. A
+> `ToolCallingController` enforces the authority chain; a real
+> `WindowsUIAutomationAdapter` drives the desktop semantically (live-verified
+> with Notepad); the `ComputerAutomationAgent` runs inside the multi-agent
+> runtime. Browser automation remains a separate future phase (not faked).
+> **352 tests pass** (incl. 2 real live-desktop tests). Email and the full
+> stress harness are not yet implemented.
+>
+> **(Superseded status line below kept for history.)** Contracts + vertical
+> slice (Golden 01) + Phase 2 model gateway (+SSE streaming) + Phase 3 context
+> engine + Phase 4 ChromaDB RAG + Phase 5 Memory + **Phase 6 Dynamic Planner +
+> Multi-Agent Runtime** are complete. A typed planner produces a validated task graph; a
+> specialist-agent registry + `MultiAgentRuntime` schedule it with bounded
+> concurrency, dependency resolution, verification and bounded replanning, while
+> preserving the authority chain (agents propose; the runtime validates and
+> executes only registered tools). Browser/computer agents are real interfaces
+> that return UNSUPPORTED (not faked). **324 tests pass.** Real browser/desktop
+> automation, email, and the full stress harness are **not yet implemented**.
+>
+> **(Superseded status line below kept for history.)** Contracts + vertical
+> slice (Golden 01) + Phase 2 model gateway (+SSE streaming) + Phase 3 context
+> engine + Phase 4 ChromaDB RAG + **Phase 5 Memory** are complete. Verified workflow memory
+> (SQLite + a dedicated `autoflow_workflows` Chroma collection) learns reusable
+> semantic workflows from verified executions (verification-gated promotion,
+> never failed/unverified), retrieves them semantically with tenant/workspace
+> authorization, and binds parameters for reuse — integrated into the context
+> engine as data. Session and graph memory exist too. **283 tests pass.** This
+> is workflow learning, not model-weight training. Real browser/desktop
+> automation, email, dynamic multi-agent planner, and the full stress harness
+> are **not yet implemented**.
+>
+> **(Superseded status lines below kept for history.)** Contracts + vertical
+> slice (Golden 01) + Phase 2 model gateway + Phase 3 context engine + **Phase 4
+> ChromaDB RAG** are complete. Real persistent ChromaDB provides authorized semantic retrieval with
+> evidence/provenance and physical tenant/workspace/permission isolation, wired
+> into the context engine (retrieved knowledge is DATA, never instructions).
+> Embeddings run through a provider interface (offline deterministic local +
+> OpenAI-compatible remote for NVIDIA/ModelScope). **244 tests pass.** Persistent
+> memory (Phase 5), real browser/desktop automation, email, and the full stress
+> harness are **not yet implemented**.
+>
+> **(Superseded status line below kept for history.)** Contracts + vertical slice
+> (Golden 01) + **Phase 2 real model gateway** + **Phase 3 context engine** are
+> complete.
+> A real NVIDIA (OpenAI-compatible) provider is live-verified end-to-end; the
+> gateway is provider-neutral with retry/fallback/health and a deterministic
+> local provider for offline/tests. The **context engine** now assembles
+> budgeted, trust-separated, permission-filtered, deterministically-hashed
+> context before every model call (retrieved/tool/external content is always
+> framed as DATA, never instructions). Driven headlessly by `autoflow run`,
+> `autoflow model test`, and `autoflow context inspect|estimate|validate`.
+> **208 tests pass.** RAG/ChromaDB, persistent memory, real browser/desktop
+> automation, email, and the full stress harness are **not yet implemented**.
+> See `docs/IMPLEMENTATION_STATUS.md` and `ai-ml/docs/TASKS.md`.
+
 ## Phase 0 — Contracts
 
 Build typed schemas and test fixtures first.

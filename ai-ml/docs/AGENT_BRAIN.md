@@ -232,3 +232,109 @@ WORKFLOW COMPOSITION
 ```
 
 This provides a path from a fixed MVP to a much broader agentic execution platform.
+
+
+---
+
+## 13. Memory (Phase 5 — implemented)
+
+The agent brain now has a memory layer with four distinct classes that are
+never collapsed into one store:
+
+```text
+SESSION MEMORY      bounded per-execution state (variables, observations)
+KNOWLEDGE MEMORY    enterprise documents (Phase 4 RAG, autoflow_knowledge)
+WORKFLOW MEMORY     verified reusable semantic workflows (SQLite +
+                    autoflow_workflows Chroma collection)
+GRAPH MEMORY        apps/tools/actions/artifacts/workflows relationships
+```
+
+Learning loop (verified-only):
+
+```text
+EXECUTE → OBSERVE → VERIFY
+   → normalize trace into a SemanticWorkflow (no coordinates)
+   → promotion policy (verification-gated; secrets/unregistered-tools rejected)
+   → versioned WorkflowMemory (content-hash dedupe)
+FUTURE PROMPT
+   → semantic workflow search (tenant/workspace authorized)
+   → compatibility check → parameter binding → validate → execute → verify
+```
+
+Retrieved workflows enter the Context Engine as `WORKFLOW_MEMORY` at
+`AUTHORIZED_MEMORY` trust — they are **data**, never instructions, and can never
+override system policy. Failed executions are recorded as failure statistics but
+are never promoted. This is workflow learning, not model fine-tuning.
+
+
+---
+
+## 14. Dynamic Planner + Multi-Agent Runtime (Phase 6 — implemented)
+
+The planner/executor separation is now real:
+
+```text
+PLANNER            "What is the whole job?"   -> typed PlannerOutput + graph
+EXECUTION AGENTS   "What next, given state?"  -> structured AgentActionProposal
+TOOL AUTHORITY     runtime validates + executes only registered tools
+```
+
+**Planning** (`planning/`): `PlannerOutput` is a strict contract; a
+`RuntimeGraph` of `PlanNode`s carries mutable node status with an explicit state
+machine (PENDING→READY→RUNNING→SUCCEEDED/FAILED→NEEDS_REPLAN). `validate_plan`
+rejects cycles, unknown/self dependencies, duplicate ids, unknown agents,
+unregistered tools, unavailable capabilities, ungranted permissions, and
+high-risk nodes lacking approval/verification. `DeterministicPlanner` always
+produces a valid graph; `ModelPlanner` asks the gateway for structured output
+and **fails closed** to the deterministic planner on malformed output.
+
+**Agents** (`agents/`): `SpecialistAgent` receives a bounded `AgentContext`
+(never global state) and returns a structured `AgentResult` (concise reasoning
+summary — no chain-of-thought). Nine agents exist; document/research/spreadsheet/
+qa/presentation/coding/communication are executable, while **browser and
+computer are real interfaces that return UNSUPPORTED** rather than faking
+automation.
+
+**Runtime** (`runtime/multi_agent.py`): `MultiAgentRuntime` selects ready nodes,
+runs independent nodes with bounded concurrency, resolves fan-out/fan-in,
+detects deadlocks, and enforces the authority chain
+(propose → schema → policy → permission → approval → `ToolRegistry` execute →
+observe → verify). Failures trigger bounded replanning; verified runs feed the
+Phase 5 promotion pipeline. Retrieved workflow memory enters as data and never
+overrides policy.
+
+
+---
+
+## 15. Tool-Calling Controller + Computer Agent (Phase 7 — implemented)
+
+The `ComputerAutomationAgent` is now real. It reasons over a bounded
+`DesktopObservation` (semantic controls, not pixels) and proposes one semantic
+computer action per node; it never touches the desktop directly. The
+`ToolCallingController` is the sole path from proposal to execution:
+
+```text
+ComputerAgent proposal (e.g. click role=button name=Save)
+  → schema → registry → authorization → policy/risk → approval
+  → ToolRegistry → WindowsUIAutomationAdapter → observation → verification
+```
+
+Safety: destructive/shell tools are never registered; application launch is
+allowlisted; secrets and typed text are redacted from traces; ambiguous targets
+are refused (never guessed). Live-verified on Windows with a real Notepad
+workflow. Browser automation is a distinct future phase.
+
+
+---
+
+## 16. Computer-Autonomy Bundle (Phases 8–14 — implemented)
+
+The agent brain can now drive both desktop and browser through one authority
+chain. It reasons over a **fused** observation (UIA + DOM + screenshot), resolves
+a semantic target (never guessing among ambiguous candidates), proposes a
+semantic action, and lets the `ToolCallingController` + `AutonomyLoop` execute →
+observe → verify with a bounded recovery ladder and stuck detection. Vision is
+evidence (rate-limited, corroborated), never authority; deterministic OpenCV is
+preferred first. Approvals bind to the exact action+observation; rate limits and
+resource locks bound autonomy. Live-verified: real Notepad (UIA) and real
+headless browser (Playwright).

@@ -54,6 +54,10 @@ class ModelDefinition(VersionedModel):
     cost_input_per_1k: float | None = Field(default=None, ge=0)
     cost_output_per_1k: float | None = Field(default=None, ge=0)
     policy_tags: frozenset[str] = frozenset()
+    # Some providers only return content via SSE streaming (e.g. reasoning
+    # models on ModelScope). When True, the provider must use its streaming
+    # path and aggregate deltas into the final response.
+    requires_streaming: bool = False
 
     @field_validator("model_id")
     @classmethod

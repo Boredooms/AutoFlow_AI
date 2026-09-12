@@ -57,3 +57,46 @@ def test_cli_phase_status(capsys):
 def test_cli_requires_subcommand():
     with pytest.raises(SystemExit):
         main([])
+
+
+def test_cli_mission_run_complete(capsys, tmp_path):
+    """`autoflow mission run` drives supervisor+specialists over a real file."""
+
+    doc = tmp_path / "cli_mission.txt"
+    doc.write_text("foo baseline", encoding="utf-8")
+    rc = main(["mission", "run", "edit the document and save it", "--file", str(doc)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["all_verified"] is True
+    assert out["outcome"] == "complete"
+    assert out["agenticity"]["is_agentic"] is True
+    assert out["agenticity"]["false_success"] == 0
+    assert out["delegations"] >= 1
+    # the trace shows real delegation + verification messages
+    types = {m["type"] for m in out["messages"]}
+    assert "task_request" in types
+    assert "verification_result" in types
+
+
+def test_cli_mission_run_missing_file_fails_closed(capsys, tmp_path):
+    """A missing target document must NOT produce a fake success."""
+
+    rc = main(["mission", "run", "edit the document and save it",
+               "--file", str(tmp_path / "does_not_exist.txt")])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["all_verified"] is False
+    assert out["outcome"] != "complete"
+    assert out["agenticity"]["false_success"] == 0
+
+
+def test_cli_websearch_not_opted_in_fails_closed(capsys, monkeypatch):
+    """`websearch run` without --allow-web must fail closed, not fake results."""
+
+    monkeypatch.delenv("AUTOFLOW_ALLOW_WEB", raising=False)
+    rc = main(["websearch", "run", "anything at all"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["outcome"] == "not_enabled"
+    assert out["result_count"] == 0
+    assert out["results"] == []
