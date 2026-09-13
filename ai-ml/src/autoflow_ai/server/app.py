@@ -49,8 +49,23 @@ def _make_handler(server_state: AutoFlowServer):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.end_headers()
             self.wfile.write(body)
+
+        # -- CORS preflight ----------------------------------------------
+        def do_OPTIONS(self):
+            # Browsers send a preflight OPTIONS before a cross-origin JSON POST
+            # (e.g. the desktop uploading a roster to /upload). Answer it with
+            # permissive CORS headers so the real request is allowed through.
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _html(self, text, status=200):
             body = text.encode("utf-8")
@@ -81,6 +96,63 @@ def _make_handler(server_state: AutoFlowServer):
                 return obj if isinstance(obj, dict) else {}
             except Exception:
                 raise ValueError("invalid JSON body")
+
+        def _handle_upload(self):
+            """Save an uploaded file to a temp dir and return its absolute path.
+
+            Body: JSON {"filename": "...", "content_b64": "..."}. Used by the
+            desktop attachment button so the AI/ML side (which reads the file
+            locally) gets a real on-disk path for the roster. Confined to a
+            dedicated temp directory; only a safe basename is honoured.
+            """
+            import base64
+            import os
+            import tempfile
+            from pathlib import Path
+
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            _upload_max = 8 * 1024 * 1024  # 8 MB raw JSON (~6 MB file)
+            if length <= 0:
+                return self._json({"error": "empty upload"}, 400)
+            if length > _upload_max:
+                remaining = length
+                while remaining > 0:
+                    got = self.rfile.read(min(65536, remaining))
+                    if not got:
+                        break
+                    remaining -= len(got)
+                self.close_connection = True
+                return self._json({"error": "file too large"}, 400)
+
+            raw = self.rfile.read(length)
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except Exception:  # noqa: BLE001
+                return self._json({"error": "invalid JSON body"}, 400)
+
+            filename = str(obj.get("filename") or "upload.bin")
+            content_b64 = obj.get("content_b64") or ""
+            try:
+                data = base64.b64decode(content_b64, validate=True)
+            except Exception:  # noqa: BLE001
+                return self._json({"error": "content_b64 is not valid base64"}, 400)
+            if not data:
+                return self._json({"error": "no file content"}, 400)
+
+            # Only keep a safe basename + a whitelisted extension.
+            safe = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(filename)) or "upload.bin"
+            ext = os.path.splitext(safe)[1].lower()
+            if ext not in (".xlsx", ".xls", ".csv"):
+                return self._json({"error": f"unsupported file type: {ext or 'none'}"}, 400)
+
+            up_dir = Path(tempfile.gettempdir()) / "autoflow_uploads"
+            up_dir.mkdir(parents=True, exist_ok=True)
+            # Prefix with a short unique token to avoid collisions.
+            token = base64.urlsafe_b64encode(os.urandom(6)).decode().rstrip("=")
+            dest = up_dir / f"{token}_{safe}"
+            dest.write_bytes(data)
+            return self._json({"ok": True, "path": str(dest), "name": safe,
+                               "bytes": len(data)}, 201)
 
         def log_message(self, *a):  # silence default logging
             return
@@ -120,6 +192,13 @@ def _make_handler(server_state: AutoFlowServer):
         # -- POST --------------------------------------------------------
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+
+            # File upload (e.g. an employee roster .xlsx for the reassign-work
+            # flow) uses its own larger raw reader so it is not constrained by
+            # the JSON body cap used for control messages.
+            if path == "/upload":
+                return self._handle_upload()
+
             try:
                 body = self._read_body()
             except ValueError as exc:
@@ -155,9 +234,30 @@ def _make_handler(server_state: AutoFlowServer):
                 rec = server_state.registry.get(m.group(1))
                 if rec is None:
                     return self._json({"error": "not found"}, 404)
+                # Auto-route real desktop-control goals (e.g. "write a paragraph
+                # in ms word", "search youtube for X") to the REAL desktop
+                # executor: generate content with the LLM, then drive Word /
+                # the browser and independently verify. Everything else runs the
+                # deterministic document society. Same endpoint, honest routing.
+                from .desktop_mission import detect_desktop_goal
+
+                if detect_desktop_goal(rec.prompt,
+                                       roster_path=(getattr(rec, "target_path", "") or "")) is not None:
+                    server_state.registry.run_desktop_async(rec, use_model=True)
+                    return self._json({"ok": True, "mission_id": rec.mission_id,
+                                       "status": "running", "mode": "desktop"})
                 server_state.registry.run_simulation_async(
                     rec, await_approval=bool(body.get("await_approval", False)))
                 return self._json({"ok": True, "mission_id": rec.mission_id, "status": "running"})
+
+            m = re.match(r"^/missions/([\w\-]+)/desktop$", path)
+            if m:
+                rec = server_state.registry.get(m.group(1))
+                if rec is None:
+                    return self._json({"error": "not found"}, 404)
+                server_state.registry.run_desktop_async(rec, use_model=True)
+                return self._json({"ok": True, "mission_id": rec.mission_id,
+                                   "status": "running", "mode": "desktop"})
 
             m = re.match(r"^/models/([\w\-]+)/test$", path)
             if m:

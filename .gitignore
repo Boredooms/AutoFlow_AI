@@ -54,6 +54,10 @@ object-store/
 tmp/
 .tmp/
 
+# ---- Flagship runtime artifacts (transient generated files; keep the dir) ----
+fixtures/flagship/runtime/*
+!fixtures/flagship/runtime/.gitkeep
+
 # ---- AutoFlow runtime / model cache (never commit weights or runtime data) ----
 .autoflow/
 **/.autoflow/

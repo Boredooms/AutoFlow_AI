@@ -141,11 +141,12 @@ def simulate_mission(
     execution_id: str = "exec_sim",
     auto_approve: bool = True,
     sink=None,
+    gmail_adapter=None,
 ) -> SimulationResult:
-    """Run the flagship over a deterministic environment with a live trace.
-
-    Deterministic = in-memory Gmail DOM + real local .docx (no network, no real
-    desktop). This is the safe full-loop inspection path (Part 60).
+    """Run the flagship over a deterministic document environment with a live
+    trace. The email transport is pluggable: pass ``gmail_adapter`` to use a
+    real adapter (e.g. real SMTP); defaults to the deterministic in-memory
+    ``FakeGmailAdapter`` so the loop can be inspected with no network.
     """
 
     from ..computer_use.gmail import FakeGmailAdapter
@@ -153,7 +154,9 @@ def simulate_mission(
 
     tracer = MissionTracer(sink=sink)
     tracer.emit(TraceStage.SUPERVISOR, "mission received", document_prompt)
-    wf = FlagshipWorkflow(gmail_adapter=FakeGmailAdapter(), auto_approve=auto_approve)
+    wf = FlagshipWorkflow(
+        gmail_adapter=gmail_adapter or FakeGmailAdapter(), auto_approve=auto_approve
+    )
     result = wf.run(document_prompt=document_prompt, document_path=document_path,
                     email=email, execution_id=execution_id)
 

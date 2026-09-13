@@ -49,7 +49,9 @@ def test_ne_04_available_reports_status():
 @needs_needle
 def test_ne_05_builds_26_tools():
     tools = build_tools(execute=False)
-    assert len(tools) == 28  # 26 named in the manifest + open_file/open_folder wired
+    # 26 named in the manifest + open_file/open_folder wired
+    # + search_kaggle_datasets + write_notepad.
+    assert len(tools) == 30
 
 
 @needs_needle

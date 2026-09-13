@@ -68,4 +68,11 @@ def open_document(path: str | Path) -> DocumentAdapter:
         from .text_adapter import TextAdapter
 
         return TextAdapter(p)
+    if suffix == ".xlsx":
+        from .spreadsheet_adapter import SpreadsheetAdapter
+
+        # Read/inspect an existing workbook. Building a NEW workbook uses
+        # SpreadsheetAdapter(path, create=True) directly (spreadsheet tools),
+        # not open_document, since a new file does not yet exist on disk.
+        return SpreadsheetAdapter(p)
     raise DocumentError(f"unsupported document type: {suffix!r}")

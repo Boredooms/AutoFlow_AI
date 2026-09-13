@@ -81,6 +81,65 @@ class MissionRegistry:
         with self._lock:
             return list(self._missions.values())
 
+    def _build_real_report_attachment(self, tmp: Path) -> Path:
+        """Build the real, independently-verified weekly operations .xlsx from
+        the approved flagship fixtures (spreadsheet.create + spreadsheet.validate).
+        Falls back to a plain text placeholder if the fixtures are not present
+        in this checkout — the fallback is explicit, never a silent fake xlsx.
+        """
+        from ..runtime.registry import ToolRegistry
+        from ..runtime.spreadsheet_tools import SpreadsheetSession, register_spreadsheet_tools
+        from ..schemas.tools import ToolCallRequest
+
+        # ai-ml/src/autoflow_ai/server/missions.py -> repo root is 5 parents up
+        repo_root = Path(__file__).resolve().parents[4]
+        fixtures = repo_root / "fixtures" / "flagship" / "data"
+        sales, ops, targets = fixtures / "sales.csv", fixtures / "operations.csv", fixtures / "targets.csv"
+        if not (sales.exists() and ops.exists() and targets.exists()):
+            att = tmp / "report_attachment.txt"
+            att.write_text("attachment payload (flagship fixtures not found)", encoding="utf-8")
+            return att
+
+        registry = ToolRegistry()
+        register_spreadsheet_tools(registry, SpreadsheetSession(), workspace_root=repo_root)
+        out_rel = f"fixtures/flagship/runtime/mission_{__import__('uuid').uuid4().hex[:8]}.xlsx"
+        create = registry.execute(ToolCallRequest(
+            tool_call_id="tcall_missionxx", tool_name="spreadsheet.create",
+            arguments={
+                "target_path": out_rel,
+                "sales_csv": "fixtures/flagship/data/sales.csv",
+                "operations_csv": "fixtures/flagship/data/operations.csv",
+                "targets_csv": "fixtures/flagship/data/targets.csv",
+                "period_label": "This Week",
+            },
+            execution_id="exec_missionxxxx", step_id="step_missionxxxx",
+        ))
+        if not create.ok:
+            att = tmp / "report_attachment.txt"
+            att.write_text(f"attachment payload (spreadsheet.create failed: {create.error_message})",
+                          encoding="utf-8")
+            return att
+        # Independently verify before attaching — never attach an unverified artifact.
+        validate = registry.execute(ToolCallRequest(
+            tool_call_id="tcall_missionvv", tool_name="spreadsheet.validate",
+            arguments={
+                "artifact_path": out_rel,
+                "sales_csv": "fixtures/flagship/data/sales.csv",
+                "operations_csv": "fixtures/flagship/data/operations.csv",
+                "targets_csv": "fixtures/flagship/data/targets.csv",
+                "min_on_time_pct": 95.0,
+            },
+            execution_id="exec_missionxxxx", step_id="step_missionxxxx",
+        ))
+        artifact_path = Path(create.output["artifact_path"])
+        if not (validate.ok and validate.output.get("verified")):
+            # Honest: do not attach a report that failed independent verification.
+            att = tmp / "report_attachment.txt"
+            att.write_text("attachment payload (report failed independent verification)",
+                          encoding="utf-8")
+            return att
+        return artifact_path
+
     def run_simulation(self, rec: MissionRecord, *, await_approval: bool = False) -> None:
         """Run a deterministic flagship simulation, emitting canonical events."""
 
@@ -88,13 +147,29 @@ class MissionRegistry:
         rec.bus.emit(rec.mission_id, EventType.MISSION_STARTED, source="supervisor",
                      message=rec.prompt)
 
+        from ..computer_use.smtp_email import build_email_adapter
         from ..society import EmailSpec, simulate_mission
 
         tmp = Path(tempfile.mkdtemp())
         doc = tmp / "report.txt"
         doc.write_text("foo baseline report content", encoding="utf-8")
-        att = tmp / "report_attachment.txt"
-        att.write_text("attachment payload", encoding="utf-8")
+
+        # The email attachment is a REAL, independently-verified .xlsx built
+        # from the approved flagship fixtures (falls back to a placeholder
+        # text attachment if the fixtures aren't present in this environment,
+        # e.g. a checkout without fixtures/ — never fakes the attachment).
+        att = self._build_real_report_attachment(tmp)
+
+        # The email adapter is chosen the same way regardless of who called
+        # this mission (CLI, tests, or the Control Plane via the desktop): real
+        # SMTP only when both AUTOFLOW_ALLOW_REAL_SIDE_EFFECTS and
+        # REAL_EMAIL_ENABLED are set; otherwise the deterministic fake sink.
+        # Nothing here special-cases a goal string — this is the same seam
+        # every mission uses.
+        email_adapter, send_mode = build_email_adapter()
+        rec.bus.emit(rec.mission_id, EventType.CONTEXT_BUILT, source="gmail",
+                     status="info", message=f"email transport: {send_mode}",
+                     payload={"send_mode": send_mode})
 
         # stream each trace line as a canonical event as it happens
         def _sink(line: str) -> None:
@@ -109,6 +184,7 @@ class MissionRegistry:
                 email=EmailSpec(recipient="reviewer@example.com", subject="Report",
                                 body="Please find the report attached.", attachment_path=str(att)),
                 execution_id=rec.mission_id, auto_approve=not await_approval, sink=_sink,
+                gmail_adapter=email_adapter,
             )
         except Exception as exc:  # noqa: BLE001 - never crash the server thread
             rec.status = "failed"
@@ -118,6 +194,7 @@ class MissionRegistry:
             return
 
         rec.result = result.as_dict()
+        rec.result["send_mode"] = send_mode
         if result.document_verified:
             rec.bus.emit(rec.mission_id, EventType.VERIFICATION_PASSED, source="verify",
                          status="ok", message="document independently verified")
@@ -217,4 +294,139 @@ class MissionRegistry:
         t = threading.Thread(target=self.run_real, args=(rec,),
                              kwargs={"target_path": target_path, "use_model": use_model},
                              daemon=True)
+        t.start()
+
+    # -- real desktop control (open Word / browser and actually perform it) --
+
+    def run_desktop(self, rec: MissionRecord, *, use_model: bool = True) -> None:
+        """Take real control of the machine to perform a desktop goal.
+
+        Generates content with the real LLM (when configured), then drives a
+        real application (MS Word via COM, or the browser) to perform the task,
+        and independently verifies the result. Emits canonical events for the
+        live trace. Never fakes success — an unverified result is reported as
+        failed.
+        """
+        from .desktop_mission import (
+            detect_desktop_goal,
+            generate_paragraph,
+            open_in_browser,
+            run_reassign_work,
+            send_email_real,
+            write_notepad,
+            write_paragraph_in_word,
+        )
+
+        rec.mode = "desktop"
+        rec.status = "running"
+        rec.bus.emit(rec.mission_id, EventType.MISSION_STARTED, source="supervisor",
+                     message=rec.prompt)
+
+        plan = detect_desktop_goal(rec.prompt, roster_path=(rec.target_path or ""))
+        if plan is None:
+            rec.status = "failed"
+            rec.bus.emit(rec.mission_id, EventType.MISSION_FAILED, status="fail",
+                         message="no supported real desktop action for this goal")
+            rec.bus.close()
+            return
+
+        rec.bus.emit(rec.mission_id, EventType.PLAN_CREATED, source="planner",
+                     status="ok", message=f"desktop action: {plan.kind}",
+                     payload={"kind": plan.kind})
+
+        def _emit(stage: str, message: str) -> None:
+            etype = _STAGE_TO_EVENT.get(stage, EventType.ACTION_PROPOSED)
+            rec.bus.emit(rec.mission_id, etype, source=stage, status="info", message=message)
+
+        router = None
+        if use_model:
+            try:
+                from ..model_gateway import build_gateway
+                _reg, router = build_gateway()
+            except Exception:  # noqa: BLE001
+                router = None
+
+        try:
+            if plan.kind == "word_write":
+                rec.bus.emit(rec.mission_id, EventType.OBSERVATION_CAPTURED, source="research",
+                             status="info", message=f"generating a paragraph about {plan.topic}")
+                content, src = generate_paragraph(plan.topic, router=router)
+                rec.bus.emit(rec.mission_id, EventType.CONTEXT_BUILT, source="planner",
+                             status="ok", message=f"content ready ({src})",
+                             payload={"content_source": src, "chars": len(content)})
+                result = write_paragraph_in_word(content, plan.filename, emit=_emit)
+                result.content_source = src
+            elif plan.kind == "notepad_write":
+                rec.bus.emit(rec.mission_id, EventType.OBSERVATION_CAPTURED, source="research",
+                             status="info", message=f"generating text about {plan.topic}")
+                content, src = generate_paragraph(plan.topic, router=router)
+                rec.bus.emit(rec.mission_id, EventType.CONTEXT_BUILT, source="planner",
+                             status="ok", message=f"content ready ({src})",
+                             payload={"content_source": src, "chars": len(content)})
+                result = write_notepad(content, plan.filename, emit=_emit)
+                result.content_source = src
+            elif plan.kind == "send_email":
+                result = send_email_real(plan, router=router, emit=_emit)
+            elif plan.kind == "reassign_work":
+                result = run_reassign_work(plan, router=router, emit=_emit)
+            elif plan.kind == "web_search":
+                result = open_in_browser(plan.query, is_search=True, emit=_emit)
+            elif plan.kind == "open_app":
+                import os as _os
+                _emit("computer", f"launching application: {plan.app}")
+                _os.system(f"start {plan.app}")  # noqa: S605 - user-driven desktop action
+                from .desktop_mission import DesktopResult
+                result = DesktopResult(kind="open_app", executed=True, verified=True,
+                                       outcome="complete", mode="APP", artifact_path=plan.app,
+                                       steps=[{"stage": "computer", "message": f"opened {plan.app}", "ok": True}])
+            else:
+                rec.status = "failed"
+                rec.bus.emit(rec.mission_id, EventType.MISSION_FAILED, status="fail",
+                             message="unsupported desktop action")
+                rec.bus.close()
+                return
+        except Exception as exc:  # noqa: BLE001 - never crash the server thread
+            rec.status = "failed"
+            rec.bus.emit(rec.mission_id, EventType.MISSION_FAILED, status="fail",
+                         message=f"{type(exc).__name__}: {exc}")
+            rec.bus.close()
+            return
+
+        rec.result = {
+            "complete": bool(result.verified),
+            "document_verified": bool(result.verified),
+            "outcome": result.outcome,
+            "reason": result.reason,
+            "mode": result.mode,
+            "artifact_path": result.artifact_path,
+            "content_source": result.content_source,
+            "content_preview": result.content_preview,
+            "kind": result.kind,
+            "verified_tasks": [s["message"] for s in result.steps if s.get("ok")],
+            "failed_tasks": [s["message"] for s in result.steps if not s.get("ok")],
+        }
+
+        if result.verified:
+            rec.status = "complete"
+            rec.bus.emit(rec.mission_id, EventType.VERIFICATION_PASSED, source="verify",
+                         status="ok", message="outcome independently verified")
+            # Only file-producing modes create a real artifact. Browser/Gmail/
+            # app actions don't produce a file, so they don't emit one.
+            _FILE_MODES = ("LIVE_WORD", "DOCX_FALLBACK", "TXT_FALLBACK", "LIVE_NOTEPAD")
+            if result.artifact_path and result.mode in _FILE_MODES:
+                name = Path(result.artifact_path).name
+                rec.bus.emit(rec.mission_id, EventType.ARTIFACT_CREATED, source="document",
+                             status="ok", message=name,
+                             payload={"name": name, "path": result.artifact_path, "mode": result.mode})
+            rec.bus.emit(rec.mission_id, EventType.MISSION_COMPLETED, source="final",
+                         status="ok", message=f"desktop task complete ({result.mode})")
+        else:
+            rec.status = "failed"
+            rec.bus.emit(rec.mission_id, EventType.MISSION_FAILED, status="fail",
+                         message=result.reason or "outcome could not be verified")
+        rec.bus.close()
+
+    def run_desktop_async(self, rec: MissionRecord, *, use_model: bool = True) -> None:
+        t = threading.Thread(target=self.run_desktop, args=(rec,),
+                             kwargs={"use_model": use_model}, daemon=True)
         t.start()

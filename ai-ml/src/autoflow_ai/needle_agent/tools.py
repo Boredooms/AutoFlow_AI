@@ -262,10 +262,41 @@ def build_tools(*, execute: bool = False, output_dir: str | Path | None = None) 
     def click_element(target: str):
         "Click a UI element identified by its visible label and type."
         return {"action": "click_element", "target": target}
+    @needle.tool
+    def search_kaggle_datasets(query: str):
+        "Search Kaggle for datasets matching a topic."
+        url = "https://www.kaggle.com/datasets?search=" + urllib.parse.quote(query)
+        webbrowser.open(url)
+        return {"action": "search_kaggle_datasets", "query": query, "status": "done"}
+
+    @needle.tool
+    def write_notepad(filename: str, content: str):
+        "Write text content into a Notepad (.txt) document and open it."
+        action = {"action": "write_notepad", "filename": filename, "content": content}
+        if not execute:
+            return {**action, "status": "planned", "executed": False}
+        # Ensure a .txt target inside the confined output directory.
+        name = _safe_name(filename)
+        if not name.lower().endswith(".txt"):
+            name = f"{name}.txt"
+        target = _ensure_dir() / name
+        # Write the real file first (real, verifiable side effect), then open it
+        # in Notepad so the content shows up on screen.
+        target.write_text(content, encoding="utf-8")
+        try:
+            import subprocess
+
+            # Launch Notepad on the saved file; detached so it stays open.
+            subprocess.Popen(["notepad.exe", str(target)])
+            return {**action, "path": str(target), "status": "done", "executed": True}
+        except Exception:  # noqa: BLE001 - notepad not available -> file still written
+            return {**action, "path": str(target), "status": "done_no_open",
+                    "executed": True, "note": "wrote file; could not launch Notepad"}
 
     return [
         write_text, open_browser, search_youtube, play_video, compose_email,
         open_website, search_web, open_app, create_note,
+        search_kaggle_datasets, write_notepad,
         create_file, write_cell, write_range, insert_row, apply_formula, save_file,
         insert_heading, generate_document, open_email_client, open_file, find_file,
         open_folder, delete_file, rename_file, close_window, minimize_window,
